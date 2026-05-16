@@ -8,6 +8,13 @@ export interface MpcAdapter {
 
 export class StubMcpAdapter implements MpcAdapter {
   async callTool(toolName: string, args: Record<string, unknown>): Promise<ToolResult> {
+    if (toolName === "appium_session_management" && args.action === "create") {
+      return {
+        success: false,
+        error: "Stub adapter does not create real sessions. Use --dry-run or APPIUM_MCP_MODE=real."
+      };
+    }
+
     return {
       success: true,
       data: {

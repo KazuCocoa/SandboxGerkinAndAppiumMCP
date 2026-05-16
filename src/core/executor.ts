@@ -1,4 +1,5 @@
 import type { CanonicalAction } from "../schema/action-schema.js";
+import { extractTextFromMcpData } from "./mcp-result-utils.js";
 import { inferFallbackAction } from "../steps/fallback/nlp-adapter.js";
 import { StepRegistry } from "../steps/step-registry.js";
 import type {
@@ -153,7 +154,7 @@ export class Executor {
       const response = await this.mcp.callTool("appium_get_page_source", {
         sessionId: context.sessionId
       });
-      const source = typeof response.data === "string" ? response.data : JSON.stringify(response.data);
+      const source = extractTextFromMcpData(response.data);
       if (!source.includes(action.text)) {
         throw new Error(`Expected text not visible: ${action.text}`);
       }

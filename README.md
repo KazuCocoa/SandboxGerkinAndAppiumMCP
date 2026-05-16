@@ -20,6 +20,11 @@ Optional environment variables:
 - `APPIUM_MCP_COMMAND` default is `appium-mcp`
 - `APPIUM_MCP_ARGS` space-separated args passed to the MCP process
 - `PLATFORM` `android` or `ios`
+- `APPIUM_UDID` target a specific device/emulator ID
+- `APPIUM_DEVICE_NAME` explicit device name for session creation
+- `APPIUM_PLATFORM_VERSION` explicit platform version
+- `APPIUM_NO_RESET` set `1` or `true` to keep app state between runs
+- `DEBUG_APPIUM_SESSION` set `1` to print requested capabilities and session response summary
 
 Android smoke test (guarded):
 

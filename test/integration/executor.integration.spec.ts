@@ -7,7 +7,7 @@ import { SessionManager } from "../../src/core/session-manager.js";
 import { Executor } from "../../src/core/executor.js";
 
 describe("executor integration", () => {
-  test("runs sample feature with stub adapter", async () => {
+  test("fails in non-dry-run when using stub adapter", async () => {
     const feature = parseFeatureFile("features/smoke/login.feature");
     const registry = new StepRegistry();
     registry.registerMany(androidCoreHandlers());
@@ -16,15 +16,13 @@ describe("executor integration", () => {
     const sessions = new SessionManager(mcp);
     const executor = new Executor(registry, mcp, sessions, "android");
 
-    const report = await executor.runFeature(feature, {
-      allowFallback: true
-    });
+    await expect(
+      executor.runFeature(feature, {
+        allowFallback: true
+      })
+    ).rejects.toThrow("Stub adapter does not create real sessions");
 
     await mcp.close();
-
-    expect(report.totals.failed).toBe(1);
-    expect(report.totals.passed).toBe(0);
-    expect(report.scenarios[0]?.steps.length).toBeGreaterThan(0);
   });
 
   test("supports dry-run for deterministic registry", async () => {
