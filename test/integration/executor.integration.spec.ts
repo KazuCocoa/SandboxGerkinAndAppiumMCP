@@ -42,6 +42,6 @@ describe("executor integration", () => {
     await mcp.close();
 
     expect(report.totals.failed).toBe(0);
-    expect(report.totals.passed).toBe(1);
+    expect(report.totals.passed).toBe(feature.scenarios.length);
   });
 });

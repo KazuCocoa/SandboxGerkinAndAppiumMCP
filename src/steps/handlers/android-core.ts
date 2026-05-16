@@ -1,9 +1,5 @@
-import { promisify } from "node:util";
-import { execFile } from "node:child_process";
 import type { StepDefinition } from "../../types.js";
 import { extractTextFromMcpData } from "../../core/mcp-result-utils.js";
-
-const execFileAsync = promisify(execFile);
 
 export function androidCoreHandlers(): StepDefinition[] {
   return [
@@ -23,27 +19,40 @@ export function androidCoreHandlers(): StepDefinition[] {
       pattern: /^I launch app with package "([^"]+)"$/,
       priority: 100,
       handler: async (ctx, mcp, packageName) => {
+        if (packageName === "com.android.settings") {
+          const startActivityAttempts: Array<Record<string, unknown>> = [
+            {
+              method: "startActivity",
+              appPackage: "com.android.settings",
+              appActivity: ".Settings",
+              sessionId: ctx.sessionId
+            },
+            {
+              method: "startActivity",
+              intentAction: "android.settings.SETTINGS",
+              sessionId: ctx.sessionId
+            }
+          ];
+
+          for (const params of startActivityAttempts) {
+            try {
+              const result = await mcp.callTool("appium_execute_mobile_method", params);
+              if (result.success) {
+                await sleep(700);
+                return;
+              }
+            } catch {
+              // Try next MCP launch strategy.
+            }
+          }
+        }
+
         await mcp.callTool("appium_app_lifecycle", {
           action: "activate",
           appId: packageName,
           packageName,
           sessionId: ctx.sessionId
         });
-
-        // Some environments report success but do not bring the app to foreground.
-        await sleep(700);
-        let currentPackage = await resolveCurrentPackageFromAdb();
-        if (currentPackage !== packageName) {
-          const opened = await tryOpenPackageViaAdb(packageName);
-          if (opened) {
-            await sleep(700);
-            currentPackage = await resolveCurrentPackageFromAdb();
-          }
-        }
-
-        if (currentPackage && currentPackage !== packageName) {
-          throw new Error(`Expected package ${packageName} to be foreground, but found ${currentPackage}`);
-        }
       }
     },
     {
@@ -75,20 +84,20 @@ export function androidCoreHandlers(): StepDefinition[] {
       pattern: /^I tap one of texts "([^"]+)"$/,
       priority: 94,
       handler: async (ctx, mcp, candidatesRaw) => {
-        const candidates = candidatesRaw
-          .split("|")
-          .map((item) => item.trim())
-          .filter((item) => item.length > 0);
-
-        if (candidates.length === 0) {
-          throw new Error("No candidates provided for one-of text tap");
-        }
+        const candidates = parsePipeSeparatedCandidates(candidatesRaw, "tap");
 
         const maxScrollAttempts = 4;
         for (let attempt = 0; attempt <= maxScrollAttempts; attempt += 1) {
           for (const candidate of candidates) {
+            const beforeSource = await getPageSourceText(mcp, ctx.sessionId);
             const tapped = await tapTextWithFallback(ctx.sessionId, mcp, candidate);
-            if (tapped) {
+            if (!tapped) {
+              continue;
+            }
+
+            await sleep(500);
+            const afterSource = await getPageSourceText(mcp, ctx.sessionId);
+            if (afterSource !== beforeSource) {
               return;
             }
           }
@@ -154,11 +163,7 @@ export function androidCoreHandlers(): StepDefinition[] {
       pattern: /^I assert the text "([^"]+)" is visible$/,
       priority: 80,
       handler: async (ctx, mcp, expectedText) => {
-        const response = await mcp.callTool("appium_get_page_source", {
-          sessionId: ctx.sessionId
-        });
-
-        const source = extractTextFromMcpData(response.data);
+        const source = await getPageSourceText(mcp, ctx.sessionId);
 
         if (!source.includes(expectedText)) {
           throw new Error(`Expected text not visible: ${expectedText}`);
@@ -170,20 +175,8 @@ export function androidCoreHandlers(): StepDefinition[] {
       pattern: /^I assert one of texts "([^"]+)" is visible$/,
       priority: 79,
       handler: async (ctx, mcp, candidatesRaw) => {
-        const candidates = candidatesRaw
-          .split("|")
-          .map((item) => item.trim())
-          .filter((item) => item.length > 0);
-
-        if (candidates.length === 0) {
-          throw new Error("No candidates provided for one-of text assertion");
-        }
-
-        const response = await mcp.callTool("appium_get_page_source", {
-          sessionId: ctx.sessionId
-        });
-
-        const source = extractTextFromMcpData(response.data);
+        const candidates = parsePipeSeparatedCandidates(candidatesRaw, "assertion");
+        const source = await getPageSourceText(mcp, ctx.sessionId);
         const matched = candidates.find((candidate) => source.includes(candidate));
         if (!matched) {
           const visibleTexts = extractVisibleTexts(source).slice(0, 20).join(" | ");
@@ -198,17 +191,11 @@ export function androidCoreHandlers(): StepDefinition[] {
       pattern: /^I assert current package is "([^"]+)"$/,
       priority: 79,
       handler: async (ctx, mcp, expectedPackage) => {
-        const toolResult = await mcp.callTool("appium_execute_mobile_method", {
-          method: "getCurrentPackage",
-          sessionId: ctx.sessionId
-        });
-
-        const packageFromTool = extractCurrentPackage(toolResult.data);
-        const actualPackage = packageFromTool ?? (await resolveCurrentPackageFromAdb());
+        const actualPackage = await resolveCurrentPackageViaMcp(mcp, ctx.sessionId);
 
         if (!actualPackage) {
           throw new Error(
-            "Unable to determine current package. Set APPIUM_UDID for adb fallback or verify appium_execute_mobile_method support."
+            "Unable to determine current package via MCP tools (getCurrentPackage and page-source inference)."
           );
         }
 
@@ -279,108 +266,8 @@ function extractCurrentPackage(data: unknown): string | undefined {
   return undefined;
 }
 
-async function resolveCurrentPackageFromAdb(): Promise<string | undefined> {
-  const udid = process.env.APPIUM_UDID;
-  if (!udid) {
-    return undefined;
-  }
-
-  const commands: string[][] = [
-    ["-s", udid, "shell", "dumpsys", "window", "windows"],
-    ["-s", udid, "shell", "dumpsys", "window"],
-    ["-s", udid, "shell", "dumpsys", "activity", "activities"]
-  ];
-
-  for (const args of commands) {
-    try {
-      const { stdout } = await execFileAsync("adb", args);
-      const fromText = extractPackageFromAdbText(stdout);
-      if (fromText) {
-        return fromText;
-      }
-    } catch {
-      continue;
-    }
-  }
-
-  return undefined;
-}
-
-async function tryOpenPackageViaAdb(packageName: string): Promise<boolean> {
-  const udid = process.env.APPIUM_UDID;
-  if (!udid) {
-    return false;
-  }
-
-  // For Settings use explicit intent action; for other packages use monkey launcher fallback.
-  if (packageName === "com.android.settings") {
-    try {
-      await execFileAsync("adb", [
-        "-s",
-        udid,
-        "shell",
-        "am",
-        "start",
-        "-a",
-        "android.settings.SETTINGS"
-      ]);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  try {
-    await execFileAsync("adb", [
-      "-s",
-      udid,
-      "shell",
-      "monkey",
-      "-p",
-      packageName,
-      "-c",
-      "android.intent.category.LAUNCHER",
-      "1"
-    ]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function extractPackageFromAdbText(stdout: string): string | undefined {
-  const lines = stdout.split("\n");
-  const candidateLine = lines.find((entry) => {
-    const value = entry.toLowerCase();
-    return (
-      value.includes("mcurrentfocus") ||
-      value.includes("mfocusedapp") ||
-      value.includes("mresumedactivity") ||
-      value.includes("topresumedactivity")
-    );
-  });
-
-  if (!candidateLine) {
-    return undefined;
-  }
-
-  const slashPattern = /([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_]+)+)\//;
-  const slashMatch = slashPattern.exec(candidateLine);
-  if (slashMatch?.[1]) {
-    return slashMatch[1];
-  }
-
-  const packagePattern = /packageName=([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_]+)+)/;
-  const packageMatch = packagePattern.exec(candidateLine);
-  if (packageMatch?.[1]) {
-    return packageMatch[1];
-  }
-
-  return undefined;
 }
 
 async function tapTextWithFallback(
@@ -388,25 +275,9 @@ async function tapTextWithFallback(
   mcp: { callTool: (toolName: string, args: Record<string, unknown>) => Promise<{ success: boolean; data?: unknown }> },
   text: string
 ): Promise<boolean> {
-  const selector = `//*[@text='${text}' or @content-desc='${text}']`;
-  let snapshotSource = "";
-
-  try {
-    const sourceResult = await mcp.callTool("appium_get_page_source", {
-      sessionId
-    });
-    snapshotSource = extractTextFromMcpData(sourceResult.data);
-    const adbTapped = await tapByAdbBoundsFromPageSource(snapshotSource, text);
-    if (adbTapped) {
-      return true;
-    }
-  } catch {
-    // Continue to Appium-based fallbacks.
-  }
-
-  if (!snapshotSource.includes(text)) {
-    return false;
-  }
+  const selector =
+    `//*[@text='${text}' or @content-desc='${text}' ` +
+    `or contains(@text,'${text}') or contains(@content-desc,'${text}')]`;
 
   try {
     const findResult = await mcp.callTool("appium_find_element", {
@@ -425,7 +296,7 @@ async function tapTextWithFallback(
       return true;
     }
   } catch {
-    // Fallback below.
+    // Continue to direct gesture fallback.
   }
 
   try {
@@ -436,16 +307,6 @@ async function tapTextWithFallback(
       sessionId
     });
     return true;
-  } catch {
-    // Continue to adb-bounds fallback.
-  }
-
-  try {
-    const sourceResult = await mcp.callTool("appium_get_page_source", {
-      sessionId
-    });
-    const source = extractTextFromMcpData(sourceResult.data);
-    return await tapByAdbBoundsFromPageSource(source, text);
   } catch {
     return false;
   }
@@ -475,63 +336,27 @@ function extractElementUuid(data: unknown): string | undefined {
   return undefined;
 }
 
-async function tapByAdbBoundsFromPageSource(source: string, targetText: string): Promise<boolean> {
-  const udid = process.env.APPIUM_UDID;
-  if (!udid || source.length === 0) {
-    return false;
-  }
-
-  const bounds = findBoundsForText(source, targetText);
-  if (!bounds) {
-    return false;
-  }
-
-  const [x1, y1, x2, y2] = bounds;
-  if ([x1, y1, x2, y2].some((value) => Number.isNaN(value))) {
-    return false;
-  }
-
-  const x = Math.floor((x1 + x2) / 2);
-  const y = Math.floor((y1 + y2) / 2);
-
-  try {
-    await execFileAsync("adb", ["-s", udid, "shell", "input", "tap", String(x), String(y)]);
-    return true;
-  } catch {
-    return false;
-  }
+async function getPageSourceText(
+  mcp: { callTool: (toolName: string, args: Record<string, unknown>) => Promise<{ success: boolean; data?: unknown }> },
+  sessionId: string | undefined
+): Promise<string> {
+  const response = await mcp.callTool("appium_get_page_source", {
+    sessionId
+  });
+  return extractTextFromMcpData(response.data);
 }
 
-function findBoundsForText(source: string, targetText: string): [number, number, number, number] | undefined {
-  const escaped = escapeRegex(targetText);
-  const tagPattern = /<[^>]+>/g;
-  let tagMatch = tagPattern.exec(source);
+function parsePipeSeparatedCandidates(raw: string, context: "tap" | "assertion"): string[] {
+  const candidates = raw
+    .split("|")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
 
-  while (tagMatch) {
-    const tag = tagMatch[0];
-    const hasText = new RegExp(`\\btext=("|')${escaped}\\1`, "i").test(tag);
-    const hasContentDesc = new RegExp(`\\bcontent-desc=("|')${escaped}\\1`, "i").test(tag);
-
-    if (hasText || hasContentDesc) {
-      const boundsMatch = /\bbounds=("|')\[(\d+),(\d+)\]\[(\d+),(\d+)\]\1/i.exec(tag);
-      if (boundsMatch) {
-        return [
-          Number(boundsMatch[2]),
-          Number(boundsMatch[3]),
-          Number(boundsMatch[4]),
-          Number(boundsMatch[5])
-        ];
-      }
-    }
-
-    tagMatch = tagPattern.exec(source);
+  if (candidates.length === 0) {
+    throw new Error(`No candidates provided for one-of text ${context}`);
   }
 
-  return undefined;
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return candidates;
 }
 
 function extractVisibleTexts(source: string): string[] {
@@ -551,4 +376,39 @@ function extractVisibleTexts(source: string): string[] {
   }
 
   return Array.from(texts);
+}
+
+async function resolveCurrentPackageViaMcp(
+  mcp: { callTool: (toolName: string, args: Record<string, unknown>) => Promise<{ success: boolean; data?: unknown }> },
+  sessionId: string | undefined
+): Promise<string | undefined> {
+  const toolResult = await mcp.callTool("appium_execute_mobile_method", {
+    method: "getCurrentPackage",
+    sessionId
+  });
+
+  const packageFromTool = toolResult.success ? extractCurrentPackage(toolResult.data) : undefined;
+  const source = await getPageSourceText(mcp, sessionId);
+  const packageFromSource = inferPackageFromPageSource(source);
+
+  // Prefer package derived from current UI tree because mobile getCurrentPackage can lag on some emulator images.
+  if (packageFromSource) {
+    return packageFromSource;
+  }
+
+  return packageFromTool;
+}
+
+function inferPackageFromPageSource(source: string): string | undefined {
+  const packageAttr = /\bpackage="([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_]+)+)"/.exec(source);
+  if (packageAttr?.[1]) {
+    return packageAttr[1];
+  }
+
+  const resourceIdPrefix = /\bresource-id="([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_]+)+):id\//.exec(source);
+  if (resourceIdPrefix?.[1]) {
+    return resourceIdPrefix[1];
+  }
+
+  return undefined;
 }
