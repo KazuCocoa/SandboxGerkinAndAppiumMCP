@@ -8,7 +8,7 @@ import { Executor } from "../../src/core/executor.js";
 
 describe("executor integration", () => {
   test("fails in non-dry-run when using stub adapter", async () => {
-    const feature = parseFeatureFile("features/smoke/login.feature");
+    const feature = parseFeatureFile("features/smoke/settings.feature");
     const registry = new StepRegistry();
     registry.registerMany(androidCoreHandlers());
 
@@ -26,7 +26,7 @@ describe("executor integration", () => {
   });
 
   test("supports dry-run for deterministic registry", async () => {
-    const feature = parseFeatureFile("features/smoke/login.feature");
+    const feature = parseFeatureFile("features/smoke/settings.feature");
     const registry = new StepRegistry();
     registry.registerMany(androidCoreHandlers());
 

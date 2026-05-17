@@ -19,38 +19,10 @@ export function androidCoreHandlers(): StepDefinition[] {
       pattern: /^I launch app with package "([^"]+)"$/,
       priority: 100,
       handler: async (ctx, mcp, packageName) => {
-        if (packageName === "com.android.settings") {
-          const startActivityAttempts: Array<Record<string, unknown>> = [
-            {
-              method: "startActivity",
-              appPackage: "com.android.settings",
-              appActivity: ".Settings",
-              sessionId: ctx.sessionId
-            },
-            {
-              method: "startActivity",
-              intentAction: "android.settings.SETTINGS",
-              sessionId: ctx.sessionId
-            }
-          ];
-
-          for (const params of startActivityAttempts) {
-            try {
-              const result = await mcp.callTool("appium_execute_mobile_method", params);
-              if (result.success) {
-                await sleep(700);
-                return;
-              }
-            } catch {
-              // Try next MCP launch strategy.
-            }
-          }
-        }
-
         await mcp.callTool("appium_app_lifecycle", {
           action: "activate",
-          appId: packageName,
-          packageName,
+          id: packageName,
+          name: packageName,
           sessionId: ctx.sessionId
         });
       }
@@ -100,15 +72,6 @@ export function androidCoreHandlers(): StepDefinition[] {
             if (afterSource !== beforeSource) {
               return;
             }
-          }
-
-          if (attempt < maxScrollAttempts) {
-            await mcp.callTool("appium_gesture", {
-              action: "scroll",
-              direction: "down",
-              sessionId: ctx.sessionId
-            });
-            await sleep(500);
           }
         }
 

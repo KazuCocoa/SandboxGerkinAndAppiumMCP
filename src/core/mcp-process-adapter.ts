@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { MpcAdapter } from "./mcp-client.js";
 import type { ToolResult } from "../types.js";
+import { MCPLogCollector } from "./mcp-log-collector.js";
 
 interface RpcPending {
   resolve: (value: unknown) => void;
@@ -22,6 +23,7 @@ export class MpcProcessAdapter implements MpcAdapter {
   private nextId = 1;
   private readonly pending = new Map<number, RpcPending>();
   private stdoutBuffer = "";
+  private logCollector: MCPLogCollector | null = null;
 
   constructor(
     private readonly command: string,
@@ -57,15 +59,16 @@ export class MpcProcessAdapter implements MpcAdapter {
       pending.reject(new Error(`MCP process closed before response for request ${id}`));
     }
     this.pending.clear();
-
     const child = this.processRef;
     this.processRef = undefined;
     this.ready = false;
-
+    if (this.logCollector) {
+      this.logCollector.close();
+      this.logCollector = null;
+    }
     if (!child) {
       return;
     }
-
     await new Promise<void>((resolve) => {
       if (child.killed) {
         resolve();
@@ -81,17 +84,20 @@ export class MpcProcessAdapter implements MpcAdapter {
     if (this.processRef && this.ready) {
       return;
     }
-
     if (!this.processRef) {
+      this.logCollector = new MCPLogCollector();
       this.processRef = spawn(this.command, this.args, {
         stdio: "pipe",
         env: process.env
       });
       this.processRef.stdout.setEncoding("utf8");
-      this.processRef.stdout.on("data", (chunk: string) => this.onStdout(chunk));
+      this.processRef.stdout.on("data", (chunk: string) => {
+        this.onStdout(chunk);
+        this.logCollector?.write("[stdout]", chunk);
+      });
       this.processRef.stderr.setEncoding("utf8");
-      this.processRef.stderr.on("data", (_chunk: string) => {
-        // stderr can include debug logs from MCP server; do not fail on logs.
+      this.processRef.stderr.on("data", (chunk: string) => {
+        this.logCollector?.write("[stderr]", chunk);
       });
       this.processRef.on("exit", (code, signal) => this.onExit(code, signal));
       this.processRef.on("error", (error) => this.onSpawnError(error));

@@ -81,6 +81,8 @@ function buildCapabilities(platform: "android" | "ios"): Record<string, string |
     capabilities["appium:noReset"] = noReset === "1" || noReset.toLowerCase() === "true";
   }
 
+  capabilities["appium:forceAppLaunch"] = true;
+
   return capabilities;
 }
 

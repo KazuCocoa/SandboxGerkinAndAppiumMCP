@@ -10,12 +10,12 @@ import { StepRegistry } from "../../src/steps/step-registry.js";
 import type { ExecutionReport } from "../../src/types.js";
 
 const runSmoke = process.env.RUN_ANDROID_SMOKE === "1";
-const smokeFeaturePath = process.env.SMOKE_FEATURE_PATH ?? "features/smoke/login.feature";
+const smokeFeaturePath = process.env.SMOKE_FEATURE_PATH ?? "features/smoke/settings.feature";
 
 describe("android smoke (real appium-mcp)", () => {
   const smokeTest = runSmoke ? test : test.skip;
 
-  smokeTest("executes login smoke feature against real adapter", async () => {
+  smokeTest("executes settings smoke feature against real adapter", async () => {
     const config = loadConfigFromEnv();
     const registry = new StepRegistry();
     registry.registerMany(androidCoreHandlers());
