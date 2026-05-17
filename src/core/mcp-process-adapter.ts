@@ -80,6 +80,10 @@ export class MpcProcessAdapter implements MpcAdapter {
     });
   }
 
+  getLogCollector(): MCPLogCollector | null {
+    return this.logCollector;
+  }
+
   private async ensureStarted(): Promise<void> {
     if (this.processRef && this.ready) {
       return;

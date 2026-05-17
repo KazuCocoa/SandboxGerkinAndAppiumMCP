@@ -45,7 +45,7 @@ export interface StepResult {
   status: "passed" | "failed" | "skipped";
   durationMs: number;
   error?: string;
-  callPath: "registry" | "fallback";
+  callPath: "registry" | "fallback" | "llm";
 }
 
 export interface ScenarioResult {
@@ -71,7 +71,6 @@ export interface ExecutionReport {
 export interface RunOptions {
   dryRun?: boolean;
   continueOnFailure?: boolean;
-  allowFallback?: boolean;
 }
 
 export type StepHandler = (

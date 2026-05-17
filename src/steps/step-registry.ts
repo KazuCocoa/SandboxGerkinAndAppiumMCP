@@ -3,10 +3,12 @@ import type { StepDefinition } from "../types.js";
 interface ResolvedStep {
   definition: StepDefinition;
   args: string[];
+  isLlmFallback?: boolean;
 }
 
 export class StepRegistry {
   private readonly definitions: StepDefinition[] = [];
+  private llmFallback: StepDefinition | null = null;
 
   register(definition: StepDefinition): void {
     const collision = this.definitions.find(
@@ -26,6 +28,10 @@ export class StepRegistry {
     }
   }
 
+  setLlmFallback(definition: StepDefinition): void {
+    this.llmFallback = definition;
+  }
+
   resolve(stepText: string): ResolvedStep | undefined {
     for (const definition of this.definitions) {
       const match = definition.pattern.exec(stepText);
@@ -34,9 +40,20 @@ export class StepRegistry {
       }
       return {
         definition,
-        args: match.slice(1)
+        args: match.slice(1),
+        isLlmFallback: false
       };
     }
+
+    // Fall back to LLM if no pattern matched
+    if (this.llmFallback) {
+      return {
+        definition: this.llmFallback,
+        args: [stepText],
+        isLlmFallback: true
+      };
+    }
+
     return undefined;
   }
 }

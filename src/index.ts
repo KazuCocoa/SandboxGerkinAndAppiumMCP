@@ -5,11 +5,12 @@ import { Executor } from "./core/executor.js";
 import { createMcpAdapter } from "./core/mcp-adapter-factory.js";
 import { MpcClient } from "./core/mcp-client.js";
 import { SessionManager } from "./core/session-manager.js";
+import { createLLMExecutor } from "./core/llm-executor.js";
 import { parseFeatureFile } from "./parser/gherkin-parser.js";
 import { printReport } from "./reporters/console-reporter.js";
 import { writeJsonReport } from "./reporters/json-reporter.js";
-import { androidCoreHandlers } from "./steps/handlers/android-core.js";
 import { StepRegistry } from "./steps/step-registry.js";
+import { androidCoreHandlers } from "./steps/handlers/android-core.js";
 
 const program = new Command();
 
@@ -19,9 +20,10 @@ program
   .command("run")
   .requiredOption("--feature <path>", "Path to .feature file")
   .option("--dry-run", "Resolve steps but do not invoke appium-mcp", false)
-  .option("--allow-fallback", "Enable fallback adapter for unmatched steps", false)
   .option("--continue-on-failure", "Continue executing remaining steps after a failure", false)
   .option("--real-mcp", "Use a real appium-mcp process adapter", false)
+  .option("--llm", "Use LLM to interpret and execute steps (default: true)", true)
+  .option("--llm-provider <provider>", "LLM provider: claude, openai (default: claude)")
   .option("--report-json <path>", "Write JSON report to this path")
   .action(async (options) => {
     const config = loadConfigFromEnv();
@@ -33,12 +35,24 @@ program
     const adapter = createMcpAdapter(config, options.realMcp ? "real" : undefined);
     const mcp = new MpcClient(adapter);
     const sessions = new SessionManager(mcp);
-    const executor = new Executor(registry, mcp, sessions, config.platform);
+
+    // Create LLM executor if enabled
+    let llmExecutor = undefined;
+    if (options.llm) {
+      try {
+        llmExecutor = await createLLMExecutor(options.llmProvider, mcp.getAdapter());
+      } catch (error) {
+        console.error("Failed to create LLM executor:", error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+    }
+
+    const executor = new Executor(registry, mcp, sessions, config.platform, llmExecutor);
 
     try {
       const report = await executor.runFeature(feature, {
         dryRun: options.dryRun,
-        allowFallback: options.allowFallback,
         continueOnFailure: options.continueOnFailure
       });
 

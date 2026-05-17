@@ -4,6 +4,7 @@ import type { ToolResult } from "../types.js";
 export interface MpcAdapter {
   callTool(toolName: string, args: Record<string, unknown>): Promise<ToolResult>;
   close?: () => Promise<void>;
+  getLogCollector?: () => unknown;
 }
 
 export class StubMcpAdapter implements MpcAdapter {
@@ -41,6 +42,14 @@ export class MpcClient {
 
   setSessionId(sessionId: string | undefined): void {
     this.sessionId = sessionId;
+  }
+
+  getLogCollector(): unknown {
+    return this.adapter.getLogCollector?.();
+  }
+
+  getAdapter(): MpcAdapter {
+    return this.adapter;
   }
 
   async callTool(toolName: string, args: Record<string, unknown>): Promise<ToolResult> {
